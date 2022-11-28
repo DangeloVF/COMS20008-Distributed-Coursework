@@ -1,5 +1,0 @@
-package gol
-
-func broker() {
-
-}
