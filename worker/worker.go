@@ -96,11 +96,26 @@ func calculateNextSectionState(p golUtils.Params, w golUtils.World, startCoords 
 	return newWorldSlice
 }
 
+// func countCells(w world, p Params) int {
+// 	liveCount := 0
+// 	for y := 0; y < p.ImageHeight; y++ {
+// 		for x := 0; x < p.ImageWidth; x++ {
+// 			if w[x][y] == liveCell {
+// 				liveCount++
+// 			}
+// 		}
+// 	}
+// 	return liveCount
+// }
+
 // All the API functions that are visible
 type GOLWorker struct {
 	p golUtils.Params
 	w golUtils.World
 }
+
+// func (g *GOLWorker) SendAliveCells(req stubs.Request, res *stubs.Response) (err error) {
+// }
 
 func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (err error) {
 	if req.Message == "" {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/rpc"
 	"strings"
+	"time"
 
 	"uk.ac.bris.cs/gameoflife/golUtils"
 	"uk.ac.bris.cs/gameoflife/stubs"
@@ -31,6 +32,15 @@ func makeCall(client *rpc.Client, message string, callType stubs.Stub) string {
 	return response.Message
 }
 
+// func makeAsyncCall(client *rpc.Client, message string, callType stubs.Stub) string {
+// 	request := stubs.Request{Message: message}
+// 	response := new(stubs.Response)
+// 	calltype := string(callType)
+// 	c := client.Go(calltype, request, response)
+// 	fmt.Println("Responded: " + response.Message)
+// 	return response.Message
+// }
+
 func worldToString(p Params, w golUtils.World) string {
 	param := fmt.Sprintf("%d,%d", p.ImageHeight, p.ImageWidth)
 	var world string
@@ -42,6 +52,8 @@ func worldToString(p Params, w golUtils.World) string {
 	out := param + ";" + world
 	return out
 }
+
+// Height,Length;cell0,cell1,...
 
 func parseOutput(p Params, s string) (w golUtils.World, t int, err error) {
 	err = nil
@@ -59,6 +71,18 @@ func parseOutput(p Params, s string) (w golUtils.World, t int, err error) {
 		}
 	}
 	return
+}
+
+func tiktok(s int, finish chan bool, tick chan bool) {
+	ticker := time.NewTicker(time.Duration(s) * time.Second)
+	for {
+		select {
+		case <-finish:
+			return
+		case <-ticker.C:
+			tick <- true
+		}
+	}
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
@@ -89,8 +113,24 @@ func distributor(p Params, c distributorChannels) {
 	// Send world and parameters to server
 	makeCall(client, worldString, stubs.SendWorldData)
 
+	tickerEnd := make(chan bool)
+	tickerNotify := make(chan bool)
+	go tiktok(2, tickerEnd, tickerNotify)
+
 	// Tell server to calculate
 	response := makeCall(client, fmt.Sprint(p.Turns), stubs.CalculateNTurns)
+
+	// golFinish := false
+	// for !golFinish {
+	// 	select {
+	// 	case <-tickerNotify:
+
+	// 		c.events <- AliveCellsCount{turn, countCells(worldSlice, p)}
+	// 	case <- workerfin:
+
+	// 		golFinish=true
+	// 	}
+	// }
 
 	// parse the final calculated state
 	worldSlice, turn, _ := parseOutput(p, response)
@@ -104,7 +144,7 @@ func distributor(p Params, c distributorChannels) {
 	cellSlice := make([]util.Cell, 0)
 	for x := 0; x < p.ImageWidth; x++ {
 		for y := 0; y < p.ImageHeight; y++ {
-			if worldSlice[x][y] == live {
+			if worldSlice[x][y] == golUtils.LiveCell {
 				cellSlice = append(cellSlice, util.Cell{X: x, Y: y})
 			}
 		}
@@ -121,77 +161,4 @@ func distributor(p Params, c distributorChannels) {
 
 	// Close the channel to stop the SDL goroutine gracefully. Removing may cause deadlock.
 	close(c.events)
-}
-
-// Did D'Angelo get lazy and just copy-paste his code? yes.
-// Allow it tho because there's more shit to do
-
-const live byte = 255
-const dead byte = 0
-
-type cell struct {
-	x, y int
-}
-
-func calculateAliveNeighbours(p Params, world [][]byte, x int, y int) int {
-	var aliveNeighbours int
-	xValues := [3]int{x - 1, x, x + 1}
-	yValues := [3]int{y - 1, y, y + 1}
-
-	if xValues[0] < 0 {
-		xValues[0] = p.ImageWidth + xValues[0]
-	}
-	if xValues[2] >= p.ImageWidth {
-		xValues[2] = p.ImageWidth - xValues[2]
-	}
-
-	if yValues[0] < 0 {
-		yValues[0] = p.ImageHeight + yValues[0]
-	}
-	if yValues[2] >= p.ImageHeight {
-		yValues[2] = p.ImageHeight - yValues[2]
-	}
-
-	for _, checkX := range xValues {
-		for _, checkY := range yValues {
-			if world[checkX][checkY] == live && !(checkX == x && checkY == y) {
-				aliveNeighbours++
-			}
-		}
-	}
-
-	return aliveNeighbours
-}
-
-func calculateNextState(p Params, world [][]byte) [][]byte {
-	newWorld := make([][]byte, p.ImageWidth)
-	for i := range newWorld {
-		newWorld[i] = make([]byte, p.ImageHeight)
-	}
-	for x, first := range world {
-		for y, v := range first {
-
-			livingNeighbours := calculateAliveNeighbours(p, world, x, y)
-
-			if livingNeighbours == 3 || (livingNeighbours == 2 && v == live) {
-				newWorld[x][y] = live
-			} else {
-				newWorld[x][y] = dead
-			}
-		}
-	}
-	return newWorld
-}
-
-func calculateAliveCells(p Params, world [][]byte) []cell {
-	var livingCells []cell
-	for y, first := range world {
-		for x, v := range first {
-			if v == live {
-				livingCells = append(livingCells, cell{x: x, y: y})
-			}
-		}
-	}
-
-	return livingCells
 }
