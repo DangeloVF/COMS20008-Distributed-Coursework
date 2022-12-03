@@ -32,17 +32,17 @@ func makeCall(client *rpc.Client, message string, callType stubs.Stub) string {
 	return response.Message
 }
 
-// func makeAsyncCall(client *rpc.Client, message string, callType stubs.Stub) string {
-// 	request := stubs.Request{Message: message}
-// 	response := new(stubs.Response)
-// 	calltype := string(callType)
-// 	c := client.Go(calltype, request, response)
-// 	fmt.Println("Responded: " + response.Message)
-// 	return response.Message
-// }
+func makeAsyncCall(client *rpc.Client, message string, callType stubs.Stub) (done *rpc.Call, response *stubs.Response) {
+	request := stubs.Request{Message: message}
+	response = new(stubs.Response)
+	calltype := string(callType)
+	done = client.Go(calltype, request, response, nil)
+	return
+}
 
 func worldToString(p Params, w golUtils.World) string {
-	param := fmt.Sprintf("%d,%d", p.ImageHeight, p.ImageWidth)
+	param := fmt.Sprintf("%d,%d,%d,%d", p.ImageHeight, p.ImageWidth, p.Threads, p.Turns)
+	fmt.Println("sending params:" + param)
 	var world string
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
@@ -87,7 +87,6 @@ func tiktok(s int, finish chan bool, tick chan bool) {
 
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
-
 	// Create a 2D slice to store the world.
 	worldSlice := golUtils.MakeWorld(p.ImageHeight, p.ImageWidth)
 
@@ -117,23 +116,27 @@ func distributor(p Params, c distributorChannels) {
 	tickerNotify := make(chan bool)
 	go tiktok(2, tickerEnd, tickerNotify)
 
+	elapsedTurns := 0
+	aliveCells := 0
 	// Tell server to calculate
-	response := makeCall(client, fmt.Sprint(p.Turns), stubs.CalculateNTurns)
+	workerFin, workerResponse := makeAsyncCall(client, fmt.Sprint(p.Turns), stubs.CalculateNTurns)
 
-	// golFinish := false
-	// for !golFinish {
-	// 	select {
-	// 	case <-tickerNotify:
+	golFinish := false
+	for !golFinish {
+		select {
+		case <-tickerNotify:
+			receivedCellCount := makeCall(client, "", stubs.SendCellCount)
+			parseData := strings.Split(receivedCellCount, ",")
+			fmt.Sscan(parseData[0], &elapsedTurns)
+			fmt.Sscan(parseData[1], &aliveCells)
+			c.events <- AliveCellsCount{elapsedTurns, aliveCells}
+		case <-workerFin.Done:
+			golFinish = true
+		}
+	}
 
-	// 		c.events <- AliveCellsCount{turn, countCells(worldSlice, p)}
-	// 	case <- workerfin:
-
-	// 		golFinish=true
-	// 	}
-	// }
-
-	// parse the final calculated state
-	worldSlice, turn, _ := parseOutput(p, response)
+	// parse the final calculated state\
+	worldSlice, turn, _ := parseOutput(p, workerResponse.Message)
 
 	//close server connection
 	client.Close()

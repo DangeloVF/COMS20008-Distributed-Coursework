@@ -4,7 +4,7 @@ type Stub string
 
 var SendWorldData Stub = "GOLWorker.ReceiveWorldData"
 var CalculateNTurns Stub = "GOLWorker.CalculateForTurns"
-var SendAliveCells Stub = "GOLWorker.SendAliveCells"
+var SendCellCount Stub = "GOLWorker.SendCellCount"
 
 type Response struct {
 	Message string
