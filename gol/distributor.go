@@ -13,6 +13,7 @@ import (
 
 type distributorChannels struct {
 	events     chan<- Event
+	keyPresses <-chan rune
 	ioCommand  chan<- ioCommand
 	ioIdle     <-chan bool
 	ioFilename chan<- string
@@ -38,6 +39,24 @@ func makeAsyncCall(client *rpc.Client, message string, callType stubs.Stub) (don
 	calltype := string(callType)
 	done = client.Go(calltype, request, response, nil)
 	return
+}
+
+func (c *distributorChannels) generatePGMFile(w golUtils.World, p Params, t int) {
+	// Tell IO channel to output
+	c.ioCommand <- ioOutput
+
+	// Generate file name
+	c.ioFilename <- fmt.Sprintf("%dx%dx%d",
+		p.ImageWidth,
+		p.ImageHeight,
+		t)
+
+	for x := 0; x < p.ImageWidth; x++ {
+		for y := 0; y < p.ImageHeight; y++ {
+			c.ioOutput <- w[y][x]
+		}
+	}
+
 }
 
 func worldToString(p Params, w golUtils.World) string {
@@ -130,6 +149,18 @@ func distributor(p Params, c distributorChannels) {
 			fmt.Sscan(parseData[0], &elapsedTurns)
 			fmt.Sscan(parseData[1], &aliveCells)
 			c.events <- AliveCellsCount{elapsedTurns, aliveCells}
+		// case keyPress := <-c.keyPresses:
+		// 	switch keyPress {
+		// 	case 'p':
+		// 		isPaused = !isPaused
+		// 		continue
+		// 	case 's':
+		// 		c.generatePGMFile(worldSlice, p, turn)
+		// 		continue
+		// 	case 'q':
+		// 		c.generatePGMFile(worldSlice, p, turn)
+		// 		quit = true
+		// 	}
 		case <-workerFin.Done:
 			golFinish = true
 		}
@@ -155,6 +186,7 @@ func distributor(p Params, c distributorChannels) {
 
 	// Send FinalTurnComplete event to channel
 	c.events <- FinalTurnComplete{turn, cellSlice}
+	c.generatePGMFile(worldSlice, p, p.Turns)
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
