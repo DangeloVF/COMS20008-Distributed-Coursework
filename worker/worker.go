@@ -125,12 +125,65 @@ func countCells(w golUtils.World, p golUtils.Params) int {
 
 // All the API functions that are visible
 type GOLWorker struct {
-	isCalculating bool
-	accessData    sync.Mutex
+	// Mutexes and semaphores
+	isCalculating      bool
+	stopCalculating    bool
+	pauseCalculatingSP bool
+	pauseMutex         sync.Mutex
+	pauseCalculatingCV sync.Cond
+	accessData         sync.Mutex
 
+	// Critical data
 	params      golUtils.Params
 	world       golUtils.World
 	currentTurn int
+}
+
+func (g *GOLWorker) PauseCalculations(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+	if g.pauseCalculatingSP {
+		err = errors.New("calculations already paused!")
+
+	}
+
+	fmt.Println("Pausing calculations!")
+	// set pause semaphore
+	g.pauseCalculatingSP = true
+
+	return
+}
+
+func (g *GOLWorker) UnPauseCalculations(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+	if !g.pauseCalculatingSP {
+		err = errors.New("calculations aren't paused!")
+
+	}
+	fmt.Println("Unpausing calculations!")
+	//unset pause semaphore and broadcast to waiting threads
+	g.pauseCalculatingSP = false
+	g.pauseCalculatingCV.Broadcast()
+	return
+}
+
+func (g *GOLWorker) StopCalculations(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+
+	fmt.Println("Stopping calculations!")
+
+	// set stop calculating semaphore
+	g.stopCalculating = true
+
+	return
 }
 
 func (g *GOLWorker) SendCellCount(req stubs.Request, res *stubs.Response) (err error) {
@@ -149,6 +202,43 @@ func (g *GOLWorker) SendCellCount(req stubs.Request, res *stubs.Response) (err e
 	g.accessData.Unlock()
 
 	res.Message = fmt.Sprintf("%d,%d", turn, countCells(currentWorld, params))
+	return
+}
+
+func (g *GOLWorker) SendTurnCount(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+
+	fmt.Println("Recieved request for turn count!")
+
+	// try to copy worker state into local
+	g.accessData.Lock()
+	turn := g.currentTurn
+	g.accessData.Unlock()
+
+	res.Message = fmt.Sprintf("%d", turn)
+	return
+}
+
+func (g *GOLWorker) SendCurrent(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+
+	fmt.Println("Recieved request for current state!")
+
+	// try to copy worker state into local
+	g.accessData.Lock()
+	params := g.params
+	turn := g.currentTurn
+	currentWorld := golUtils.MakeWorld(params.ImageHeight, params.ImageWidth)
+	copy(currentWorld, g.world)
+	g.accessData.Unlock()
+
+	res.Message = worldToString(currentWorld, params, turn)
 	return
 }
 
@@ -185,7 +275,12 @@ func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (e
 	g.accessData.Unlock()
 
 	fmt.Printf("going to calculate, turn = %d, going to calculate %d turns \n", turn, turnsToCalculate)
-	for turn < params.Turns {
+	for (turn < params.Turns) && !g.stopCalculating {
+		g.pauseCalculatingCV.L.Lock()
+		for g.pauseCalculatingSP {
+			g.pauseCalculatingCV.Wait()
+		}
+		g.pauseCalculatingCV.L.Unlock()
 		newWorld := calculateNextSectionState(params, currentWorld, golUtils.CoOrds{X: 0, Y: 0}, golUtils.CoOrds{X: params.ImageWidth, Y: params.ImageHeight})
 		turn++
 		// push local into workerState
@@ -196,12 +291,9 @@ func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (e
 		copy(currentWorld, newWorld)
 	}
 
-	// Send current state back
-	g.accessData.Lock()
-	res.Message = worldToString(g.world, g.params, turn)
-	g.accessData.Unlock()
+	// reset stuff
 	g.isCalculating = false
-
+	g.stopCalculating = false
 	return
 }
 
@@ -241,7 +333,7 @@ func main() {
 	pAddr := port
 	iAddr := ip
 	rand.Seed(time.Now().UnixNano())
-	rpc.Register(&GOLWorker{isCalculating: false, currentTurn: 0})
+	rpc.Register(&GOLWorker{isCalculating: false, currentTurn: 0, pauseCalculatingCV: *sync.NewCond(&sync.Mutex{})})
 	listener, _ := net.Listen("tcp", iAddr+":"+pAddr)
 	fmt.Println(listener.Addr())
 	defer listener.Close()

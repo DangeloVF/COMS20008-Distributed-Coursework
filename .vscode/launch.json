@@ -5,6 +5,7 @@
   "version": "0.2.0",
   "configurations": [
 
+
   
   
     {
@@ -43,6 +44,14 @@
         "-test.run",
         "TestPgm/-1$"
       ]
-    }
+    },
+    {
+      "name": "Launch file",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}"
+    },
+
   ]
 }

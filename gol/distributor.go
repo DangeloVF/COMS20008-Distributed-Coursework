@@ -29,7 +29,7 @@ func makeCall(client *rpc.Client, message string, callType stubs.Stub) string {
 	response := new(stubs.Response)
 	calltype := string(callType)
 	client.Call(calltype, request, response)
-	fmt.Println("Responded: " + response.Message)
+	fmt.Println("Response from call " + callType)
 	return response.Message
 }
 
@@ -38,6 +38,8 @@ func makeAsyncCall(client *rpc.Client, message string, callType stubs.Stub) (don
 	response = new(stubs.Response)
 	calltype := string(callType)
 	done = client.Go(calltype, request, response, nil)
+	fmt.Println("Response from call " + callType)
+
 	return
 }
 
@@ -138,9 +140,11 @@ func distributor(p Params, c distributorChannels) {
 	elapsedTurns := 0
 	aliveCells := 0
 	// Tell server to calculate
-	workerFin, workerResponse := makeAsyncCall(client, fmt.Sprint(p.Turns), stubs.CalculateNTurns)
+	workerFin, _ := makeAsyncCall(client, fmt.Sprint(p.Turns), stubs.CalculateNTurns)
 
 	golFinish := false
+	isPaused := false
+	output := false
 	for !golFinish {
 		select {
 		case <-tickerNotify:
@@ -149,44 +153,59 @@ func distributor(p Params, c distributorChannels) {
 			fmt.Sscan(parseData[0], &elapsedTurns)
 			fmt.Sscan(parseData[1], &aliveCells)
 			c.events <- AliveCellsCount{elapsedTurns, aliveCells}
-		// case keyPress := <-c.keyPresses:
-		// 	switch keyPress {
-		// 	case 'p':
-		// 		isPaused = !isPaused
-		// 		continue
-		// 	case 's':
-		// 		c.generatePGMFile(worldSlice, p, turn)
-		// 		continue
-		// 	case 'q':
-		// 		c.generatePGMFile(worldSlice, p, turn)
-		// 		quit = true
-		// 	}
+		case keyPress := <-c.keyPresses:
+			switch keyPress {
+			case 'p':
+
+				if isPaused {
+					makeCall(client, "", stubs.UnPauseCalculations)
+				} else {
+					makeCall(client, "", stubs.PauseCalculations)
+				}
+				isPaused = !isPaused
+				continue
+			case 's':
+				currentState := makeCall(client, "", stubs.SendCurrentState)
+				currentWorld, turn, _ := parseOutput(p, currentState)
+				c.generatePGMFile(currentWorld, p, turn)
+				continue
+			case 'q':
+				makeCall(client, "", stubs.StopCalculations)
+				golFinish = true
+			case 'k':
+				makeCall(client, "", stubs.StopCalculations)
+				golFinish = true
+				output = true
+			}
 		case <-workerFin.Done:
 			golFinish = true
+			output = true
 		}
 	}
 
+	finishedState := makeCall(client, "", stubs.SendCurrentState)
 	// parse the final calculated state\
-	worldSlice, turn, _ := parseOutput(p, workerResponse.Message)
+	worldSlice, turn, _ := parseOutput(p, finishedState)
 
 	//close server connection
 	client.Close()
 
 	// Report the final state using FinalTurnComplete event.
-
-	// Turn worldSlice into slice of util.cells
-	cellSlice := make([]util.Cell, 0)
-	for x := 0; x < p.ImageWidth; x++ {
-		for y := 0; y < p.ImageHeight; y++ {
-			if worldSlice[x][y] == golUtils.LiveCell {
-				cellSlice = append(cellSlice, util.Cell{X: x, Y: y})
+	if output {
+		// Turn worldSlice into slice of util.cells
+		cellSlice := make([]util.Cell, 0)
+		for x := 0; x < p.ImageWidth; x++ {
+			for y := 0; y < p.ImageHeight; y++ {
+				if worldSlice[x][y] == golUtils.LiveCell {
+					cellSlice = append(cellSlice, util.Cell{X: x, Y: y})
+				}
 			}
 		}
-	}
 
-	// Send FinalTurnComplete event to channel
-	c.events <- FinalTurnComplete{turn, cellSlice}
-	c.generatePGMFile(worldSlice, p, p.Turns)
+		// Send FinalTurnComplete event to channel
+		c.events <- FinalTurnComplete{turn, cellSlice}
+		c.generatePGMFile(worldSlice, p, p.Turns)
+	}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
