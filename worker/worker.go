@@ -3,11 +3,10 @@ package main
 import (
 	"errors"
 	"fmt"
-	"math/rand"
 	"net"
 	"net/rpc"
+	"strconv"
 	"strings"
-	"time"
 
 	"uk.ac.bris.cs/gameoflife/golUtils"
 	"uk.ac.bris.cs/gameoflife/stubs"
@@ -96,25 +95,33 @@ func calculateNextSectionState(p golUtils.Params, w golUtils.World, startCoords 
 	return newWorldSlice
 }
 
-// func countCells(w world, p Params) int {
-// 	liveCount := 0
-// 	for y := 0; y < p.ImageHeight; y++ {
-// 		for x := 0; x < p.ImageWidth; x++ {
-// 			if w[x][y] == liveCell {
-// 				liveCount++
-// 			}
-// 		}
-// 	}
-// 	return liveCount
-// }
+func (g *GOLWorker) GetTurn(req stubs.Request, res *stubs.Response) (err error) {
+	res.Message = strconv.Itoa(g.turn)
+	return
+}
+
+func (g *GOLWorker) CountCells(req stubs.Request, res *stubs.Response) (err error) {
+	liveCount := 0
+	for y := 0; y < g.p.ImageHeight; y++ {
+		for x := 0; x < g.p.ImageWidth; x++ {
+			if g.w[x][y] == golUtils.LiveCell {
+				liveCount++
+			}
+		}
+	}
+	res.Message = strconv.Itoa(liveCount)
+	return
+}
 
 // All the API functions that are visible
 type GOLWorker struct {
-	p golUtils.Params
-	w golUtils.World
+	p    golUtils.Params
+	w    golUtils.World
+	turn int
 }
 
 // func (g *GOLWorker) SendAliveCells(req stubs.Request, res *stubs.Response) (err error) {
+
 // }
 
 func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (err error) {
@@ -133,13 +140,12 @@ func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (e
 	}
 	fmt.Printf("Calculating for %d turns", turns)
 
-	turn := 0
 	for i := 0; i < turns; i++ {
 		g.w = calculateNextSectionState(g.p, g.w, golUtils.CoOrds{X: 0, Y: 0}, golUtils.CoOrds{X: g.p.ImageWidth, Y: g.p.ImageHeight})
-		turn++
+		g.turn++
 	}
 
-	res.Message = worldToString(g.w, g.p, turn)
+	res.Message = worldToString(g.w, g.p, g.turn)
 	return
 }
 
@@ -165,7 +171,6 @@ const ip string = "127.0.0.1"
 func main() {
 	pAddr := port
 	iAddr := ip
-	rand.Seed(time.Now().UnixNano())
 	rpc.Register(&GOLWorker{})
 	listener, _ := net.Listen("tcp", iAddr+":"+pAddr)
 	fmt.Println(listener.Addr())

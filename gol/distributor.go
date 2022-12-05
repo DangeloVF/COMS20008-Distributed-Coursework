@@ -3,6 +3,7 @@ package gol
 import (
 	"fmt"
 	"net/rpc"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,18 +29,17 @@ func makeCall(client *rpc.Client, message string, callType stubs.Stub) string {
 	response := new(stubs.Response)
 	calltype := string(callType)
 	client.Call(calltype, request, response)
-	fmt.Println("Responded: " + response.Message)
+	// fmt.Println("Responded: " + response.Message)
 	return response.Message
 }
 
-// func makeAsyncCall(client *rpc.Client, message string, callType stubs.Stub) string {
-// 	request := stubs.Request{Message: message}
-// 	response := new(stubs.Response)
-// 	calltype := string(callType)
-// 	c := client.Go(calltype, request, response)
-// 	fmt.Println("Responded: " + response.Message)
-// 	return response.Message
-// }
+func makeAsyncCall(client *rpc.Client, message string, response *stubs.Response, callType stubs.Stub) chan *rpc.Call {
+	request := stubs.Request{Message: message}
+	calltype := string(callType)
+	call := client.Go(calltype, request, response, nil)
+	// fmt.Println("Responded: " + response.Message)
+	return call.Done
+}
 
 func worldToString(p Params, w golUtils.World) string {
 	param := fmt.Sprintf("%d,%d", p.ImageHeight, p.ImageWidth)
@@ -73,8 +73,8 @@ func parseOutput(p Params, s string) (w golUtils.World, t int, err error) {
 	return
 }
 
-func tiktok(s int, finish chan bool, tick chan bool) {
-	ticker := time.NewTicker(time.Duration(s) * time.Second)
+func tick(finish chan bool, tick chan bool) {
+	ticker := time.NewTicker(2 * time.Second)
 	for {
 		select {
 		case <-finish:
@@ -113,12 +113,9 @@ func distributor(p Params, c distributorChannels) {
 	// Send world and parameters to server
 	makeCall(client, worldString, stubs.SendWorldData)
 
-	tickerEnd := make(chan bool)
-	tickerNotify := make(chan bool)
-	go tiktok(2, tickerEnd, tickerNotify)
-
 	// Tell server to calculate
-	response := makeCall(client, fmt.Sprint(p.Turns), stubs.CalculateNTurns)
+	response := new(stubs.Response)
+	done := makeAsyncCall(client, fmt.Sprint(p.Turns), response, stubs.CalculateNTurns)
 
 	// golFinish := false
 	// for !golFinish {
@@ -132,8 +129,26 @@ func distributor(p Params, c distributorChannels) {
 	// 	}
 	// }
 
+	tickerEnd := make(chan bool)
+	tickerNotify := make(chan bool)
+	go tick(tickerEnd, tickerNotify)
+
+	golFinish := false
+
+	for !golFinish {
+		select {
+		case <-done:
+			golFinish = true
+		case <-tickerNotify:
+			fmt.Println("Tick")
+			turn, _ := strconv.Atoi(makeCall(client, "", stubs.GetTurn))
+			aliveCells, _ := strconv.Atoi(makeCall(client, "", stubs.CountCells))
+			c.events <- AliveCellsCount{turn, aliveCells}
+		}
+	}
+
 	// parse the final calculated state
-	worldSlice, turn, _ := parseOutput(p, response)
+	worldSlice, turn, _ := parseOutput(p, response.Message)
 
 	//close server connection
 	client.Close()
