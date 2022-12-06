@@ -130,8 +130,6 @@ func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (e
 		return
 	}
 
-	fmt.Println("Got Message: " + req.Message)
-
 	var turns int
 	_, err = fmt.Sscan(req.Message, &turns)
 	if err != nil {
@@ -154,7 +152,6 @@ func (g *GOLWorker) ReceiveWorldData(req stubs.Request, res *stubs.Response) (er
 		err = errors.New("no data recieved")
 		return
 	}
-	fmt.Println("Got Message: " + req.Message)
 
 	g.w, g.p, err = parseWorldString(req.Message)
 	if err != nil {
