@@ -3,7 +3,6 @@ package gol
 import (
 	"fmt"
 	"net/rpc"
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 
 type distributorChannels struct {
 	events     chan<- Event
+	keyPresses <-chan rune
 	ioCommand  chan<- ioCommand
 	ioIdle     <-chan bool
 	ioFilename chan<- string
@@ -29,20 +29,41 @@ func makeCall(client *rpc.Client, message string, callType stubs.Stub) string {
 	response := new(stubs.Response)
 	calltype := string(callType)
 	client.Call(calltype, request, response)
-	// fmt.Println("Responded: " + response.Message)
+	fmt.Println("Response from call " + callType)
 	return response.Message
 }
 
-func makeAsyncCall(client *rpc.Client, message string, response *stubs.Response, callType stubs.Stub) chan *rpc.Call {
+func makeAsyncCall(client *rpc.Client, message string, callType stubs.Stub) (done *rpc.Call, response *stubs.Response) {
 	request := stubs.Request{Message: message}
+	response = new(stubs.Response)
 	calltype := string(callType)
-	call := client.Go(calltype, request, response, nil)
-	// fmt.Println("Responded: " + response.Message)
-	return call.Done
+	done = client.Go(calltype, request, response, nil)
+	fmt.Println("Response from call " + callType)
+
+	return
+}
+
+func (c *distributorChannels) generatePGMFile(w golUtils.World, p Params, t int) {
+	// Tell IO channel to output
+	c.ioCommand <- ioOutput
+
+	// Generate file name
+	c.ioFilename <- fmt.Sprintf("%dx%dx%d",
+		p.ImageWidth,
+		p.ImageHeight,
+		t)
+
+	for x := 0; x < p.ImageWidth; x++ {
+		for y := 0; y < p.ImageHeight; y++ {
+			c.ioOutput <- w[y][x]
+		}
+	}
+
 }
 
 func worldToString(p Params, w golUtils.World) string {
-	param := fmt.Sprintf("%d,%d", p.ImageHeight, p.ImageWidth)
+	param := fmt.Sprintf("%d,%d,%d,%d", p.ImageHeight, p.ImageWidth, p.Threads, p.Turns)
+	fmt.Println("sending params:" + param)
 	var world string
 	for y := 0; y < p.ImageHeight; y++ {
 		for x := 0; x < p.ImageWidth; x++ {
@@ -87,7 +108,6 @@ func tick(finish chan bool, tick chan bool) {
 
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
-
 	// Create a 2D slice to store the world.
 	worldSlice := golUtils.MakeWorld(p.ImageHeight, p.ImageWidth)
 
@@ -113,60 +133,79 @@ func distributor(p Params, c distributorChannels) {
 	// Send world and parameters to server
 	makeCall(client, worldString, stubs.SendWorldData)
 
-	// Tell server to calculate
-	response := new(stubs.Response)
-	done := makeAsyncCall(client, fmt.Sprint(p.Turns), response, stubs.CalculateNTurns)
-
-	// golFinish := false
-	// for !golFinish {
-	// 	select {
-	// 	case <-tickerNotify:
-
-	// 		c.events <- AliveCellsCount{turn, countCells(worldSlice, p)}
-	// 	case <- workerfin:
-
-	// 		golFinish=true
-	// 	}
-	// }
-
 	tickerEnd := make(chan bool)
 	tickerNotify := make(chan bool)
-	go tick(tickerEnd, tickerNotify)
+	go tiktok(2, tickerEnd, tickerNotify)
+
+	elapsedTurns := 0
+	aliveCells := 0
+	// Tell server to calculate
+	workerFin, _ := makeAsyncCall(client, fmt.Sprint(p.Turns), stubs.CalculateNTurns)
 
 	golFinish := false
-
+	isPaused := false
+	output := false
 	for !golFinish {
 		select {
-		case <-done:
-			golFinish = true
 		case <-tickerNotify:
-			fmt.Println("Tick")
-			turn, _ := strconv.Atoi(makeCall(client, "", stubs.GetTurn))
-			aliveCells, _ := strconv.Atoi(makeCall(client, "", stubs.CountCells))
-			c.events <- AliveCellsCount{turn, aliveCells}
+			receivedCellCount := makeCall(client, "", stubs.SendCellCount)
+			parseData := strings.Split(receivedCellCount, ",")
+			fmt.Sscan(parseData[0], &elapsedTurns)
+			fmt.Sscan(parseData[1], &aliveCells)
+			c.events <- AliveCellsCount{elapsedTurns, aliveCells}
+		case keyPress := <-c.keyPresses:
+			switch keyPress {
+			case 'p':
+
+				if isPaused {
+					makeCall(client, "", stubs.UnPauseCalculations)
+				} else {
+					makeCall(client, "", stubs.PauseCalculations)
+				}
+				isPaused = !isPaused
+				continue
+			case 's':
+				currentState := makeCall(client, "", stubs.SendCurrentState)
+				currentWorld, turn, _ := parseOutput(p, currentState)
+				c.generatePGMFile(currentWorld, p, turn)
+				continue
+			case 'q':
+				makeCall(client, "", stubs.StopCalculations)
+				golFinish = true
+			case 'k':
+				makeCall(client, "", stubs.StopCalculations)
+				golFinish = true
+				output = true
+			}
+		case <-workerFin.Done:
+			golFinish = true
+			output = true
 		}
 	}
 
-	// parse the final calculated state
-	worldSlice, turn, _ := parseOutput(p, response.Message)
+	finishedState := makeCall(client, "", stubs.SendCurrentState)
+	// parse the final calculated state\
+	worldSlice, turn, _ := parseOutput(p, finishedState)
 
 	//close server connection
 	client.Close()
 
 	// Report the final state using FinalTurnComplete event.
-
-	// Turn worldSlice into slice of util.cells
-	cellSlice := make([]util.Cell, 0)
-	for x := 0; x < p.ImageWidth; x++ {
-		for y := 0; y < p.ImageHeight; y++ {
-			if worldSlice[x][y] == golUtils.LiveCell {
-				cellSlice = append(cellSlice, util.Cell{X: x, Y: y})
+	if output {
+		// Turn worldSlice into slice of util.cells
+		cellSlice := make([]util.Cell, 0)
+		for x := 0; x < p.ImageWidth; x++ {
+			for y := 0; y < p.ImageHeight; y++ {
+				if worldSlice[x][y] == golUtils.LiveCell {
+					cellSlice = append(cellSlice, util.Cell{X: x, Y: y})
+				}
 			}
 		}
-	}
 
-	// Send FinalTurnComplete event to channel
-	c.events <- FinalTurnComplete{turn, cellSlice}
+		// Send FinalTurnComplete event to channel
+		c.events <- FinalTurnComplete{turn, cellSlice}
+		c.generatePGMFile(worldSlice, p, p.Turns)
+	}
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle

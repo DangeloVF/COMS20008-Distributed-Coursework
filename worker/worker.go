@@ -3,34 +3,50 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/rpc"
-	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"uk.ac.bris.cs/gameoflife/golUtils"
 	"uk.ac.bris.cs/gameoflife/stubs"
 )
 
-func parseWorldString(s string) (golUtils.World, golUtils.Params, error) {
+func parseWorldString(s string) (world golUtils.World, params golUtils.Params, err error) {
 	sSplit := strings.Split(s, ";")
 	pSplit := strings.Split(sSplit[0], ",")
-	p := golUtils.Params{}
-	if _, err := fmt.Sscan(pSplit[0], &p.ImageHeight); err != nil {
-		return nil, golUtils.Params{Turns: 0, Threads: 0, ImageWidth: 0, ImageHeight: 0}, err
+
+	// TODO: optimise this crap
+	// parse params section of received message
+	// imgHeight
+	if _, err = fmt.Sscan(pSplit[0], &params.ImageHeight); err != nil {
+		return
 	}
-	if _, err := fmt.Sscan(pSplit[1], &p.ImageWidth); err != nil {
-		return nil, golUtils.Params{Turns: 0, Threads: 0, ImageWidth: 0, ImageHeight: 0}, err
+	// imgWidth
+	if _, err = fmt.Sscan(pSplit[1], &params.ImageWidth); err != nil {
+		return
+	}
+	// # of threads
+	if _, err = fmt.Sscan(pSplit[2], &params.Threads); err != nil {
+		return
+	}
+	// # of turns
+	if _, err = fmt.Sscan(pSplit[3], &params.Turns); err != nil {
+		return
 	}
 
+	// parse world section of received message
 	wSplit := strings.Split(sSplit[1], ",")
-	w := golUtils.MakeWorld(p.ImageHeight, p.ImageWidth)
-	for y := 0; y < p.ImageHeight; y++ {
-		for x := 0; x < p.ImageWidth; x++ {
-			fmt.Sscan(wSplit[x+y*p.ImageHeight], &w[x][y])
+	world = golUtils.MakeWorld(params.ImageHeight, params.ImageWidth)
+	for y := 0; y < params.ImageHeight; y++ {
+		for x := 0; x < params.ImageWidth; x++ {
+			fmt.Sscan(wSplit[x+y*params.ImageHeight], &world[x][y])
 		}
 	}
-	return w, p, nil
+
+	return
 }
 
 func worldToString(w golUtils.World, p golUtils.Params, turns int) string {
@@ -95,34 +111,141 @@ func calculateNextSectionState(p golUtils.Params, w golUtils.World, startCoords 
 	return newWorldSlice
 }
 
-func (g *GOLWorker) GetTurn(req stubs.Request, res *stubs.Response) (err error) {
-	res.Message = strconv.Itoa(g.turn)
-	return
-}
-
-func (g *GOLWorker) CountCells(req stubs.Request, res *stubs.Response) (err error) {
+func countCells(w golUtils.World, p golUtils.Params) int {
 	liveCount := 0
-	for y := 0; y < g.p.ImageHeight; y++ {
-		for x := 0; x < g.p.ImageWidth; x++ {
-			if g.w[x][y] == golUtils.LiveCell {
+	for y := 0; y < p.ImageHeight; y++ {
+		for x := 0; x < p.ImageWidth; x++ {
+			if w[x][y] == golUtils.LiveCell {
 				liveCount++
 			}
 		}
 	}
-	res.Message = strconv.Itoa(liveCount)
-	return
+	return liveCount
 }
 
 // All the API functions that are visible
 type GOLWorker struct {
-	p    golUtils.Params
-	w    golUtils.World
-	turn int
+	// Mutexes and semaphores
+	isCalculating      bool
+	stopCalculating    bool
+	pauseCalculatingSP bool
+	pauseMutex         sync.Mutex
+	pauseCalculatingCV sync.Cond
+	accessData         sync.Mutex
+
+	// Critical data
+	params      golUtils.Params
+	world       golUtils.World
+	currentTurn int
 }
 
-// func (g *GOLWorker) SendAliveCells(req stubs.Request, res *stubs.Response) (err error) {
+func (g *GOLWorker) PauseCalculations(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+	if g.pauseCalculatingSP {
+		err = errors.New("calculations already paused!")
 
-// }
+	}
+
+	fmt.Println("Pausing calculations!")
+	// set pause semaphore
+	g.pauseCalculatingSP = true
+
+	return
+}
+
+func (g *GOLWorker) UnPauseCalculations(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+	if !g.pauseCalculatingSP {
+		err = errors.New("calculations aren't paused!")
+
+	}
+	fmt.Println("Unpausing calculations!")
+	//unset pause semaphore and broadcast to waiting threads
+	g.pauseCalculatingSP = false
+	g.pauseCalculatingCV.Broadcast()
+	return
+}
+
+func (g *GOLWorker) StopCalculations(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+
+	fmt.Println("Stopping calculations!")
+
+	// set stop calculating semaphore
+	g.stopCalculating = true
+
+	return
+}
+
+func (g *GOLWorker) SendCellCount(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+
+	fmt.Println("Recieved request for cell count!")
+
+	// try to copy worker state into local
+	g.accessData.Lock()
+	params := g.params
+	turn := g.currentTurn
+	currentWorld := golUtils.MakeWorld(params.ImageHeight, params.ImageWidth)
+	copy(currentWorld, g.world)
+	g.accessData.Unlock()
+
+	NUMCELLS := countCells(currentWorld, params)
+
+	fmt.Printf("a TURN %d, CELLS %d\n", turn, NUMCELLS)
+
+	res.Message = fmt.Sprintf("%d,%d", turn, NUMCELLS)
+	return
+}
+
+func (g *GOLWorker) SendTurnCount(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+
+	fmt.Println("Recieved request for turn count!")
+
+	// try to copy worker state into local
+	g.accessData.Lock()
+	turn := g.currentTurn
+	g.accessData.Unlock()
+
+	res.Message = fmt.Sprintf("%d", turn)
+	return
+}
+
+func (g *GOLWorker) SendCurrent(req stubs.Request, res *stubs.Response) (err error) {
+	if req.Message != "" {
+		err = errors.New("not expecting any data, was this called by accident?")
+		return
+	}
+
+	fmt.Println("Recieved request for current state!")
+
+	// try to copy worker state into local
+	g.accessData.Lock()
+	params := g.params
+	turn := g.currentTurn
+	currentWorld := golUtils.MakeWorld(params.ImageHeight, params.ImageWidth)
+	copy(currentWorld, g.world)
+	g.accessData.Unlock()
+
+	res.Message = worldToString(currentWorld, params, turn)
+	return
+}
 
 func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (err error) {
 	if req.Message == "" {
@@ -130,20 +253,54 @@ func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (e
 		return
 	}
 
-	var turns int
-	_, err = fmt.Sscan(req.Message, &turns)
+	fmt.Println("received request to calculate!")
+	var turnsToCalculate int
+
+	_, err = fmt.Sscan(req.Message, &turnsToCalculate)
 	if err != nil {
 		res.Message = "error"
 		return
 	}
-	fmt.Printf("Calculating for %d turns", turns)
 
-	for i := 0; i < turns; i++ {
-		g.w = calculateNextSectionState(g.p, g.w, golUtils.CoOrds{X: 0, Y: 0}, golUtils.CoOrds{X: g.p.ImageWidth, Y: g.p.ImageHeight})
-		g.turn++
+	// Check calculations haven't already started
+	if g.isCalculating {
+		err = errors.New("worker is currently doing a calculation")
+		return
 	}
 
-	res.Message = worldToString(g.w, g.p, g.turn)
+	g.isCalculating = true
+	fmt.Println("beginning calculations!")
+
+	// try to copy worker state into local
+	currentWorld := golUtils.MakeWorld(g.params.ImageHeight, g.params.ImageWidth)
+	g.accessData.Lock()
+	copy(currentWorld, g.world)
+	params := g.params
+	turn := g.currentTurn
+	g.accessData.Unlock()
+
+	fmt.Printf("going to calculate, turn = %d, going to calculate %d turns \n", turn, turnsToCalculate)
+	for (turn < params.Turns) && !g.stopCalculating {
+
+		g.pauseCalculatingCV.L.Lock()
+		for g.pauseCalculatingSP {
+			g.pauseCalculatingCV.Wait()
+		}
+		g.pauseCalculatingCV.L.Unlock()
+		newWorld := calculateNextSectionState(params, currentWorld, golUtils.CoOrds{X: 0, Y: 0}, golUtils.CoOrds{X: params.ImageWidth, Y: params.ImageHeight})
+		turn++
+		// push local into workerState
+
+		g.accessData.Lock()
+		copy(g.world, newWorld)
+		g.currentTurn = turn
+		g.accessData.Unlock()
+		copy(currentWorld, newWorld)
+	}
+
+	// reset stuff
+	g.isCalculating = false
+	g.stopCalculating = false
 	return
 }
 
@@ -152,12 +309,26 @@ func (g *GOLWorker) ReceiveWorldData(req stubs.Request, res *stubs.Response) (er
 		err = errors.New("no data recieved")
 		return
 	}
+	fmt.Println("Received world data!")
 
-	g.w, g.p, err = parseWorldString(req.Message)
+	world, params, err := parseWorldString(req.Message)
 	if err != nil {
-		res.Message = "error"
+		err = errors.New("couldn't parse world string")
 		return
 	}
+
+	// Check calculations haven't already started
+	if g.isCalculating {
+		err = errors.New("worker is currently doing a calculation")
+		return
+	}
+
+	// put world and params into GOLWorker and reset current turns
+	g.accessData.Lock()
+	g.world = world
+	g.params = params
+	g.currentTurn = 0
+	g.accessData.Unlock()
 	res.Message = "received"
 	return
 }
@@ -168,7 +339,8 @@ const ip string = "127.0.0.1"
 func main() {
 	pAddr := port
 	iAddr := ip
-	rpc.Register(&GOLWorker{})
+	rand.Seed(time.Now().UnixNano())
+	rpc.Register(&GOLWorker{isCalculating: false, currentTurn: 0, pauseCalculatingCV: *sync.NewCond(&sync.Mutex{})})
 	listener, _ := net.Listen("tcp", iAddr+":"+pAddr)
 	fmt.Println(listener.Addr())
 	defer listener.Close()
