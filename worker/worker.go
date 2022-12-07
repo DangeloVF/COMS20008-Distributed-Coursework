@@ -196,12 +196,17 @@ func (g *GOLWorker) SendCellCount(req stubs.Request, res *stubs.Response) (err e
 
 	// try to copy worker state into local
 	g.accessData.Lock()
-	currentWorld := g.world
 	params := g.params
 	turn := g.currentTurn
+	currentWorld := golUtils.MakeWorld(params.ImageHeight, params.ImageWidth)
+	copy(currentWorld, g.world)
 	g.accessData.Unlock()
 
-	res.Message = fmt.Sprintf("%d,%d", turn, countCells(currentWorld, params))
+	NUMCELLS := countCells(currentWorld, params)
+
+	fmt.Printf("a TURN %d, CELLS %d\n", turn, NUMCELLS)
+
+	res.Message = fmt.Sprintf("%d,%d", turn, NUMCELLS)
 	return
 }
 
@@ -276,6 +281,7 @@ func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (e
 
 	fmt.Printf("going to calculate, turn = %d, going to calculate %d turns \n", turn, turnsToCalculate)
 	for (turn < params.Turns) && !g.stopCalculating {
+
 		g.pauseCalculatingCV.L.Lock()
 		for g.pauseCalculatingSP {
 			g.pauseCalculatingCV.Wait()
@@ -284,6 +290,7 @@ func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (e
 		newWorld := calculateNextSectionState(params, currentWorld, golUtils.CoOrds{X: 0, Y: 0}, golUtils.CoOrds{X: params.ImageWidth, Y: params.ImageHeight})
 		turn++
 		// push local into workerState
+
 		g.accessData.Lock()
 		copy(g.world, newWorld)
 		g.currentTurn = turn
