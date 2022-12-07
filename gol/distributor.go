@@ -135,7 +135,7 @@ func distributor(p Params, c distributorChannels) {
 
 	tickerEnd := make(chan bool)
 	tickerNotify := make(chan bool)
-	go tiktok(2, tickerEnd, tickerNotify)
+	go tick(tickerEnd, tickerNotify)
 
 	elapsedTurns := 0
 	aliveCells := 0
