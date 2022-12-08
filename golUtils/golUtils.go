@@ -12,6 +12,12 @@ type Params struct {
 	ImageHeight int
 }
 
+type GolState struct {
+	Params Params
+	World World
+	CurrentTurn int
+}
+
 type CoOrds struct {
 	X int
 	Y int

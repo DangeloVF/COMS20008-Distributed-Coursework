@@ -304,18 +304,9 @@ func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (e
 	return
 }
 
-func (g *GOLWorker) ReceiveWorldData(req stubs.Request, res *stubs.Response) (err error) {
-	if req.Message == "" {
-		err = errors.New("no data recieved")
-		return
-	}
-	fmt.Println("Received world data!")
+func (g *GOLWorker) ReceiveWorldData(req golUtils.GolState, res *stubs.Response) (err error) {
 
-	world, params, err := parseWorldString(req.Message)
-	if err != nil {
-		err = errors.New("couldn't parse world string")
-		return
-	}
+	fmt.Println("Received world data!")
 
 	// Check calculations haven't already started
 	if g.isCalculating {
@@ -325,9 +316,9 @@ func (g *GOLWorker) ReceiveWorldData(req stubs.Request, res *stubs.Response) (er
 
 	// put world and params into GOLWorker and reset current turns
 	g.accessData.Lock()
-	g.world = world
-	g.params = params
-	g.currentTurn = 0
+	g.world = req.World
+	g.params = req.Params
+	g.currentTurn = req.CurrentTurn
 	g.accessData.Unlock()
 	res.Message = "received"
 	return

@@ -33,6 +33,15 @@ func makeCall(client *rpc.Client, message string, callType stubs.Stub) string {
 	return response.Message
 }
 
+func sendInitialState(client *rpc.Client, intialState golUtils.GolState) (response *stubs.Response) {
+	response = new(stubs.Response)
+
+	client.Call(string(stubs.SendWorldData), intialState, response)
+	fmt.Println("Received")
+
+	return
+}
+
 func makeAsyncCall(client *rpc.Client, message string, callType stubs.Stub) (done *rpc.Call, response *stubs.Response) {
 	request := stubs.Request{Message: message}
 	response = new(stubs.Response)
@@ -59,19 +68,6 @@ func (c *distributorChannels) generatePGMFile(w golUtils.World, p Params, t int)
 		}
 	}
 
-}
-
-func worldToString(p Params, w golUtils.World) string {
-	param := fmt.Sprintf("%d,%d,%d,%d", p.ImageHeight, p.ImageWidth, p.Threads, p.Turns)
-	fmt.Println("sending params:" + param)
-	var world string
-	for y := 0; y < p.ImageHeight; y++ {
-		for x := 0; x < p.ImageWidth; x++ {
-			world = world + fmt.Sprintf("%d,", w[x][y])
-		}
-	}
-	out := param + ";" + world
-	return out
 }
 
 // Height,Length;cell0,cell1,...
@@ -128,10 +124,8 @@ func distributor(p Params, c distributorChannels) {
 	server := fmt.Sprintf("%s:%s", serverIP, serverPort)
 	client, _ := rpc.Dial("tcp", server)
 
-	worldString := worldToString(p, worldSlice)
-
 	// Send world and parameters to server
-	makeCall(client, worldString, stubs.SendWorldData)
+	sendInitialState(client, golUtils.GolState{golUtils.Params(p), worldSlice, 0})
 
 	tickerEnd := make(chan bool)
 	tickerNotify := make(chan bool)
