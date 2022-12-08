@@ -21,7 +21,7 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
-const serverIP string = "127.0.0.1"
+const serverIP string = "44.203.176.152"
 const serverPort string = "8030"
 
 func makeCall(client *rpc.Client, message string, callType stubs.Stub) string {
