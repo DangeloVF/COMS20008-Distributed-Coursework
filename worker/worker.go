@@ -334,7 +334,7 @@ func (g *GOLWorker) ReceiveWorldData(req stubs.Request, res *stubs.Response) (er
 }
 
 const port string = "8030"
-const ip string = "127.0.0.1"
+const ip string = "172.29.230.74"
 
 func main() {
 	pAddr := port
