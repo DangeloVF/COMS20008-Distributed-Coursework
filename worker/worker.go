@@ -334,14 +334,15 @@ func (g *GOLWorker) ReceiveWorldData(req stubs.Request, res *stubs.Response) (er
 }
 
 const port string = "8030"
-const ip string = "172.29.230.74"
+
+//const ip string = "127.0.0.1"
 
 func main() {
 	pAddr := port
-	iAddr := ip
+	//iAddr := ip
 	rand.Seed(time.Now().UnixNano())
 	rpc.Register(&GOLWorker{isCalculating: false, currentTurn: 0, pauseCalculatingCV: *sync.NewCond(&sync.Mutex{})})
-	listener, _ := net.Listen("tcp", iAddr+":"+pAddr)
+	listener, _ := net.Listen("tcp", ":"+pAddr)
 	fmt.Println(listener.Addr())
 	defer listener.Close()
 	rpc.Accept(listener)
