@@ -21,7 +21,7 @@ type distributorChannels struct {
 	ioInput    <-chan uint8
 }
 
-const serverIP string = "127.0.0.1"
+const serverIP string = "3.236.207.51"
 const serverPort string = "8030"
 
 func makeCall(client *rpc.Client, message string, callType stubs.Stub) string {
@@ -125,7 +125,7 @@ func distributor(p Params, c distributorChannels) {
 	client, _ := rpc.Dial("tcp", server)
 
 	// Send world and parameters to server
-	sendInitialState(client, golUtils.GolState{golUtils.Params(p), worldSlice, 0})
+	sendInitialState(client, golUtils.GolState{Params: golUtils.Params(p), World: worldSlice, CurrentTurn: 0})
 
 	tickerEnd := make(chan bool)
 	tickerNotify := make(chan bool)

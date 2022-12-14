@@ -289,8 +289,8 @@ func (g *GOLWorker) CalculateForTurns(req stubs.Request, res *stubs.Response) (e
 		g.pauseCalculatingCV.L.Unlock()
 		newWorld := calculateNextSectionState(params, currentWorld, golUtils.CoOrds{X: 0, Y: 0}, golUtils.CoOrds{X: params.ImageWidth, Y: params.ImageHeight})
 		turn++
-		// push local into workerState
 
+		// push local into workerState
 		g.accessData.Lock()
 		copy(g.world, newWorld)
 		g.currentTurn = turn
@@ -329,10 +329,9 @@ const ip string = "127.0.0.1"
 
 func main() {
 	pAddr := port
-	iAddr := ip
 	rand.Seed(time.Now().UnixNano())
 	rpc.Register(&GOLWorker{isCalculating: false, currentTurn: 0, pauseCalculatingCV: *sync.NewCond(&sync.Mutex{})})
-	listener, _ := net.Listen("tcp", iAddr+":"+pAddr)
+	listener, _ := net.Listen("tcp", ":"+pAddr)
 	fmt.Println(listener.Addr())
 	defer listener.Close()
 	rpc.Accept(listener)
